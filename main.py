@@ -11,8 +11,8 @@ import requests
 # FastAPI 앱 생성
 app = FastAPI()
 
-# --- 분석/시각화 함수들 (이 부분은 수정 없이 그대로 사용합니다) ---
-# ... (이전 답변과 동일한 create_plot_image, classify_gpc_level2, age_group 함수) ...
+# --- 분석/시각화 함수들은 그대로 사용 ---
+# ... (이전 답변과 동일한 폰트 설정, create_plot_image, classify_gpc_level2, age_group 함수) ...
 import matplotlib.pyplot as plt
 import seaborn as sns
 
@@ -59,20 +59,21 @@ def age_group(age):
     except (ValueError, TypeError):
         return '정보없음'
 
+
 # --- n8n이 호출할 메인 API 함수 (최종 수정) ---
 @app.post("/analyze", response_class=HTMLResponse)
 async def analyze_data(request: Request):
     try:
         data = await request.json()
         
-        # n8n에서 "URL" 키로 보낸 기본 URL을 받습니다.
+        # *** 수정된 부분: 이제 n8n으로부터 "URL" 키로 기본 URL을 받습니다. ***
         base_url = data.get('URL')
         
         # Render 환경 변수에서 서비스 키를 안전하게 불러옵니다.
         service_key = os.environ.get('SERVICE_KEY')
 
         if not all([base_url, service_key]):
-            return HTMLResponse(content="<h3>Error: URL 또는 서버의 SERVICE_KEY 정보가 누락되었습니다.</h3>", status_code=400)
+            return HTMLResponse(content="<h3>Error: n8n에서 URL을 받지 못했거나, 서버에 SERVICE_KEY가 설정되지 않았습니다.</h3>", status_code=400)
         
         # 1. 첫 페이지를 호출하여 totalCount를 알아냅니다.
         params_first_page = {
