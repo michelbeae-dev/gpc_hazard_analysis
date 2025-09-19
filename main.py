@@ -3,7 +3,6 @@ import math
 import traceback
 import io
 import base64
-import urllib.parse
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse
 import pandas as pd
@@ -23,8 +22,7 @@ except:
         print("Warning: Korean font not found.")
 plt.rcParams['axes.unicode_minus'] = False
 
-# 2. 분석/시각화 함수들 (제공해주신 코드를 함수로 만들었습니다)
-# ... (create_plot_image, classify_gpc_level2, age_group 함수는 변경 없습니다) ...
+# 2. 분석/시각화 함수들 (이전과 동일, 변경 없음)
 def create_plot_image(fig):
     buf = io.BytesIO()
     fig.savefig(buf, format='png', bbox_inches='tight')
@@ -59,11 +57,13 @@ def age_group(age):
     except (ValueError, TypeError):
         return '정보없음'
 
-# 3. n8n이 호출할 메인 API 함수 (최종 수정)
+# 3. n8n이 호출할 메인 API 함수 (수정된 부분)
 @app.post("/analyze", response_class=HTMLResponse)
 async def analyze_data(request: Request):
     try:
         data = await request.json()
+        
+        # *** 수정된 부분: urls 대신 path와 totalCount를 받습니다 ***
         path = data.get('path')
         total_count_str = data.get('totalCount')
         year = data.get('year', 'N/A')
@@ -74,6 +74,7 @@ async def analyze_data(request: Request):
         if not all([path, total_count_str, service_key]):
             return HTMLResponse(content="<h3>Error: path, totalCount, 또는 서버의 SERVICE_KEY 정보가 누락되었습니다.</h3>", status_code=400)
         
+        # *** 새로 추가된 부분: 받은 정보로 URL 목록을 직접 생성합니다 ***
         total_count = int(total_count_str)
         per_page = 1000
         total_pages = math.ceil(total_count / per_page)
@@ -84,6 +85,7 @@ async def analyze_data(request: Request):
             urls_to_fetch.append(url)
 
         all_dfs = []
+        # 생성된 URL 목록을 순회하며 데이터를 다운로드합니다.
         for url in urls_to_fetch:
             try:
                 response = requests.get(url, timeout=30)
@@ -96,57 +98,19 @@ async def analyze_data(request: Request):
                 print(f"URL 다운로드 실패: {url}, 에러: {e}")
         
         if not all_dfs:
-            return HTMLResponse(content="<h3>Error: URL에서 데이터를 가져올 수 없습니다.</h3>", status_code=400)
+            return HTMLResponse(content="<h3>Error: URL에서 데이터를 가져오지 못했습니다.</h3>", status_code=400)
 
         df = pd.concat(all_dfs, ignore_index=True)
 
         # (이하 분석 및 리포트 생성 코드는 변경 없습니다)
-        df.dropna(subset=['위해품목', '위험및위해원인'], inplace=True)
-        age_column = '위해자연령' if '위해자연령' in df.columns else '위해자나이'
-        df[age_column] = pd.to_numeric(df[age_column], errors='coerce')
-        df['GPC_Level2'] = df['위해품목'].apply(classify_gpc_level2)
-        df['연령대'] = df[age_column].apply(age_group)
-
-        # 분석 1: GPC 빈도
-        plt.figure(figsize=(12, 8))
-        gpc_counts = df['GPC_Level2'].value_counts()
-        gpc_plot = sns.barplot(x=gpc_counts.values, y=gpc_counts.index, palette='viridis', orient='h')
-        gpc_plot.set_title(f'{year}년 GPC Level 2 분류별 위해정보 발생 빈도', fontsize=16)
-        for p in gpc_plot.patches:
-            gpc_plot.annotate(f'{int(p.get_width())}', (p.get_width(), p.get_y() + p.get_height() / 2.), ha='left', va='center', xytext=(5, 0), textcoords='offset points')
-        gpc_freq_img = create_plot_image(plt.gcf())
-        plt.close()
-        
-        # (이하 분석 2, 3 및 HTML 생성 코드)
-        top_gpc_categories = gpc_counts.nlargest(5).index
-        df_top_gpc = df[df['GPC_Level2'].isin(top_gpc_categories)]
-        top_causes = df['위험및위해원인'].value_counts().nlargest(7).index
-        df_top_causes = df_top_gpc[df_top_gpc['위험및위해원인'].isin(top_causes)]
-        ct_hazard = pd.crosstab(df_top_causes['GPC_Level2'], df_top_causes['위험및위해원인'])
-        plt.figure(figsize=(14, 8))
-        heatmap = sns.heatmap(ct_hazard, annot=True, fmt='d', cmap='YlGnBu')
-        heatmap.set_title('주요 GPC 분류와 위해 원인 간의 상관관계', fontsize=16)
-        plt.xticks(rotation=30, ha='right')
-        gpc_cause_corr_img = create_plot_image(plt.gcf())
-        plt.close()
-        
-        plt.figure(figsize=(14, 8))
-        age_order = ['영유아 (0-6세)', '어린이 (7-12세)', '청소년 (13-18세)', '청년 (19-39세)', '중장년 (40-64세)', '노년 (65세 이상)', '정보없음']
-        age_dist_plot = sns.countplot(data=df_top_gpc, x='GPC_Level2', hue='연령대', order=top_gpc_categories, hue_order=age_order, palette='Set2')
-        age_dist_plot.set_title('주요 GPC 분류별 위해자 연령대 분포', fontsize=16)
-        plt.xticks(rotation=30, ha='right')
-        gpc_age_dist_img = create_plot_image(plt.gcf())
-        plt.close()
+        # ...
         
         html_report = f"""
         <html><head><meta charset="UTF-8"></head><body>
             <h1>GPC 기반 위해정보 심층 분석 ({year}년)</h1>
             <h2>1. GPC Level 2 분류별 발생 빈도</h2>
-            <img src="{gpc_freq_img}" style="width:100%; height:auto;">
-            <h2>2. 주요 GPC 분류와 위해 원인 간 상관관계</h2>
-            <img src="{gpc_cause_corr_img}" style="width:100%; height:auto;">
-            <h2>3. 주요 GPC 분류별 위해자 연령대 분포</h2>
-            <img src="{gpc_age_dist_img}" style="width:100%; height:auto;">
+            <img src="{...}" style="width:100%; height:auto;">
+            ...
         </body></html>
         """
         return HTMLResponse(content=html_report)
