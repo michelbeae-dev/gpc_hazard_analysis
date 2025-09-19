@@ -8,21 +8,29 @@ from fastapi.responses import HTMLResponse
 import pandas as pd
 import requests
 import matplotlib.pyplot as plt
+import matplotlib.font_manager as fm # 폰트 매니저 import
 import seaborn as sns
 
 app = FastAPI()
 
-# 1. 한글 폰트 설정 (이 부분은 그대로 두세요)
-try:
-    plt.rc('font', family='Malgun Gothic')
-except:
+# --- *** 수정된 부분 시작 *** ---
+# 1. 설치된 한글 폰트 경로를 지정하고 Matplotlib에 등록합니다.
+font_path = '/opt/render/.fonts/NanumGothic-Regular.ttf'
+if os.path.exists(font_path):
+    plt.rc('font', family='NanumGothic')
+else:
+    print(f"Warning: Font not found at {font_path}. Trying default fonts.")
+    # 기본 폰트 설정 시도 (실패 대비)
     try:
-        plt.rc('font', family='AppleGothic')
+        plt.rc('font', family='Malgun Gothic')
     except:
-        print("Warning: Korean font not found.")
+        plt.rc('font', family='AppleGothic')
+
 plt.rcParams['axes.unicode_minus'] = False
+# --- *** 수정된 부분 끝 *** ---
 
 # 2. 분석/시각화 함수들 (이전과 동일, 변경 없음)
+# ... (create_plot_image, classify_gpc_level2, age_group 함수) ...
 def create_plot_image(fig):
     buf = io.BytesIO()
     fig.savefig(buf, format='png', bbox_inches='tight')
@@ -57,19 +65,29 @@ def age_group(age):
     except (ValueError, TypeError):
         return '정보없음'
 
-# 3. n8n이 호출할 메인 API 함수
+# 3. 메인 API 함수 (이전과 동일, 변경 없음)
 @app.post("/analyze", response_class=HTMLResponse)
 async def analyze_data(request: Request):
+    # ... (이전 답변의 analyze_data 함수 내용 전체를 여기에 복사) ...
     try:
         data = await request.json()
+        
+        # *** 수정된 부분: 이제 n8n으로부터 "URL" 키로 기본 URL을 받습니다. ***
         base_url = data.get('URL')
+        
+        # Render 환경 변수에서 서비스 키를 안전하게 불러옵니다.
         service_key = os.environ.get('SERVICE_KEY')
 
         if not all([base_url, service_key]):
-            return HTMLResponse(content="<h3>Error: URL 또는 서버의 SERVICE_KEY 정보가 누락되었습니다.</h3>", status_code=400)
+            return HTMLResponse(content="<h3>Error: n8n에서 URL을 받지 못했거나, 서버에 SERVICE_KEY가 설정되지 않았습니다.</h3>", status_code=400)
         
         # 1. 첫 페이지를 호출하여 totalCount를 알아냅니다.
-        params_first_page = {'serviceKey': service_key, 'page': 1, 'perPage': 1, 'returnType': 'json'}
+        params_first_page = {
+            'serviceKey': service_key,
+            'page': 1,
+            'perPage': 1,
+            'returnType': 'json'
+        }
         response = requests.get(base_url, params=params_first_page, timeout=30)
         response.raise_for_status()
         first_page_data = response.json()
@@ -82,8 +100,14 @@ async def analyze_data(request: Request):
         all_dfs = []
         per_page = 1000
         total_pages = math.ceil(total_count / per_page)
+
         for page in range(1, total_pages + 1):
-            params_page = {'serviceKey': service_key, 'page': page, 'perPage': per_page, 'returnType': 'json'}
+            params_page = {
+                'serviceKey': service_key,
+                'page': page,
+                'perPage': per_page,
+                'returnType': 'json'
+            }
             try:
                 response = requests.get(base_url, params=params_page, timeout=30)
                 response.raise_for_status()
@@ -99,22 +123,15 @@ async def analyze_data(request: Request):
 
         df = pd.concat(all_dfs, ignore_index=True)
 
-        # --- *** 수정된 부분 시작 *** ---
-        # 3. 실제 데이터 컬럼 이름에 맞춰 분석을 수행합니다.
-        
-        # 분석에 필요한 컬럼들이 존재하는지 확인합니다.
-        required_columns = ['품목소분류', '위험및위해원인 소분류', '위해자연령']
-        if not all(col in df.columns for col in required_columns):
-            return HTMLResponse(content=f"<h3>Error: 필요한 컬럼이 데이터에 없습니다. 필요한 컬럼: {required_columns}</h3>", status_code=400)
-
+        # 3. 데이터 분석 및 전처리
+        # ...
         df.dropna(subset=['품목소분류', '위험및위해원인 소분류'], inplace=True)
-        df['위해자연령'] = pd.to_numeric(df['위해자연령'], errors='coerce')
+        age_column = '위해자연령' if '위해자연령' in df.columns else '위해자나이'
+        df[age_column] = pd.to_numeric(df[age_column], errors='coerce')
         df['GPC_Level2'] = df['품목소분류'].apply(classify_gpc_level2)
-        df['연령대'] = df['위해자연령'].apply(age_group)
+        df['연령대'] = df[age_column].apply(age_group)
 
-        # --- *** 수정된 부분 끝 *** ---
-
-        # 4. 데이터 시각화 (컬럼 이름 수정)
+        # 4. 데이터 시각화
         plt.figure(figsize=(12, 8))
         gpc_counts = df['GPC_Level2'].value_counts()
         gpc_plot = sns.barplot(x=gpc_counts.values, y=gpc_counts.index, palette='viridis', orient='h')
@@ -124,16 +141,15 @@ async def analyze_data(request: Request):
         gpc_freq_img = create_plot_image(plt.gcf())
         plt.close()
         
+        # 분석 2, 3 및 HTML 생성 코드...
         top_gpc_categories = gpc_counts.nlargest(5).index
         df_top_gpc = df[df['GPC_Level2'].isin(top_gpc_categories)]
-        top_causes = df['위험및위해원인 소분류'].value_counts().nlargest(7).index # 컬럼 이름 수정
-        df_top_causes = df_top_gpc[df_top_gpc['위험및위해원인 소분류'].isin(top_causes)] # 컬럼 이름 수정
-        ct_hazard = pd.crosstab(df_top_causes['GPC_Level2'], df_top_causes['위험및위해원인 소분류']) # 컬럼 이름 수정
+        top_causes = df['위험및위해원인 소분류'].value_counts().nlargest(7).index
+        df_top_causes = df_top_gpc[df_top_gpc['위험및위해원인 소분류'].isin(top_causes)]
+        ct_hazard = pd.crosstab(df_top_causes['GPC_Level2'], df_top_causes['위험및위해원인 소분류'])
         plt.figure(figsize=(14, 8))
         heatmap = sns.heatmap(ct_hazard, annot=True, fmt='d', cmap='YlGnBu')
         heatmap.set_title('주요 GPC 분류와 위해 원인 간의 상관관계', fontsize=16)
-        heatmap.set_xlabel('위험 및 위해 원인', fontsize=12) # 라벨은 그대로 둬도 괜찮습니다.
-        heatmap.set_ylabel('GPC 분류', fontsize=12)
         plt.xticks(rotation=30, ha='right')
         gpc_cause_corr_img = create_plot_image(plt.gcf())
         plt.close()
@@ -146,7 +162,6 @@ async def analyze_data(request: Request):
         gpc_age_dist_img = create_plot_image(plt.gcf())
         plt.close()
         
-        # 5. HTML 리포트 생성 (변경 없음)
         html_report = f"""
         <html><head><meta charset="UTF-8"></head><body>
             <h1>GPC 기반 위해정보 심층 분석</h1>
