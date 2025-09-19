@@ -1,20 +1,19 @@
-import os # 이 라인을 추가
+import os
+import math
+import traceback
+import io
+import base64
+import urllib.parse
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse
 import pandas as pd
 import requests
-import io
-import base64
-import math
 import matplotlib.pyplot as plt
 import seaborn as sns
-import traceback
-import urllib.parse # 이 라인을 추가하세요!
-
 
 app = FastAPI()
 
-# 1. 한글 폰트 설정
+# 1. 한글 폰트 설정 (이 부분은 그대로 두세요)
 try:
     plt.rc('font', family='Malgun Gothic')
 except:
@@ -24,7 +23,8 @@ except:
         print("Warning: Korean font not found.")
 plt.rcParams['axes.unicode_minus'] = False
 
-# 2. 분석/시각화 함수들
+# 2. 분석/시각화 함수들 (제공해주신 코드를 함수로 만들었습니다)
+# ... (create_plot_image, classify_gpc_level2, age_group 함수는 변경 없습니다) ...
 def create_plot_image(fig):
     buf = io.BytesIO()
     fig.savefig(buf, format='png', bbox_inches='tight')
@@ -59,27 +59,32 @@ def age_group(age):
     except (ValueError, TypeError):
         return '정보없음'
 
-# 3. n8n이 호출할 메인 API 함수
+# 3. n8n이 호출할 메인 API 함수 (최종 수정)
 @app.post("/analyze", response_class=HTMLResponse)
 async def analyze_data(request: Request):
     try:
         data = await request.json()
-        urls = data.get('urls', [])
+        path = data.get('path')
+        total_count_str = data.get('totalCount')
         year = data.get('year', 'N/A')
+        
+        # Render 환경 변수에서 서비스 키를 안전하게 불러옵니다.
         service_key = os.environ.get('SERVICE_KEY')
 
-
-        if not service_key:
-    return HTMLResponse(content="<h3>Error: 서버에 SERVICE_KEY가 설정되지 않았습니다.</h3>", status_code=500)
-       # service_key_raw = 'yPz9i7hzBc6SMyy1kgcYi9COZ2nxm2pvywSuBhMOGkA0tmS/J7Nm+3ggF6Rixf2k/qMkjAST6d6qbnmM7CckAA==' # ※※※ 여기에 실제 서비스 키를 입력하세요!!! ※※※
-       # service_key = urllib.parse.quote(service_key_raw, safe='') # 이 라인을 추가하세요!
-
-
-        if not urls:
-            return HTMLResponse(content="<h3>Error: 분석할 URL 목록이 없습니다.</h3>", status_code=400)
+        if not all([path, total_count_str, service_key]):
+            return HTMLResponse(content="<h3>Error: path, totalCount, 또는 서버의 SERVICE_KEY 정보가 누락되었습니다.</h3>", status_code=400)
+        
+        total_count = int(total_count_str)
+        per_page = 1000
+        total_pages = math.ceil(total_count / per_page)
+        
+        urls_to_fetch = []
+        for page in range(1, total_pages + 1):
+            url = f"https://api.odcloud.kr{path}?page={page}&perPage={per_page}&serviceKey={service_key}"
+            urls_to_fetch.append(url)
 
         all_dfs = []
-        for url in urls:
+        for url in urls_to_fetch:
             try:
                 response = requests.get(url, timeout=30)
                 response.raise_for_status()
@@ -89,16 +94,14 @@ async def analyze_data(request: Request):
                     all_dfs.append(df_part)
             except Exception as e:
                 print(f"URL 다운로드 실패: {url}, 에러: {e}")
-                continue
         
         if not all_dfs:
-            return HTMLResponse(content="<h3>Error: URL에서 데이터를 가져오지 못했습니다.</h3>", status_code=400)
+            return HTMLResponse(content="<h3>Error: URL에서 데이터를 가져올 수 없습니다.</h3>", status_code=400)
 
         df = pd.concat(all_dfs, ignore_index=True)
 
-        # 분석 로직 시작
+        # (이하 분석 및 리포트 생성 코드는 변경 없습니다)
         df.dropna(subset=['위해품목', '위험및위해원인'], inplace=True)
-        # 컬럼 이름이 다를 수 있으므로, 여러 가능성을 모두 시도합니다.
         age_column = '위해자연령' if '위해자연령' in df.columns else '위해자나이'
         df[age_column] = pd.to_numeric(df[age_column], errors='coerce')
         df['GPC_Level2'] = df['위해품목'].apply(classify_gpc_level2)
@@ -113,8 +116,8 @@ async def analyze_data(request: Request):
             gpc_plot.annotate(f'{int(p.get_width())}', (p.get_width(), p.get_y() + p.get_height() / 2.), ha='left', va='center', xytext=(5, 0), textcoords='offset points')
         gpc_freq_img = create_plot_image(plt.gcf())
         plt.close()
-
-        # (이하 나머지 분석 코드 및 HTML 생성 코드는 그대로 유지)
+        
+        # (이하 분석 2, 3 및 HTML 생성 코드)
         top_gpc_categories = gpc_counts.nlargest(5).index
         df_top_gpc = df[df['GPC_Level2'].isin(top_gpc_categories)]
         top_causes = df['위험및위해원인'].value_counts().nlargest(7).index
@@ -126,7 +129,7 @@ async def analyze_data(request: Request):
         plt.xticks(rotation=30, ha='right')
         gpc_cause_corr_img = create_plot_image(plt.gcf())
         plt.close()
-
+        
         plt.figure(figsize=(14, 8))
         age_order = ['영유아 (0-6세)', '어린이 (7-12세)', '청소년 (13-18세)', '청년 (19-39세)', '중장년 (40-64세)', '노년 (65세 이상)', '정보없음']
         age_dist_plot = sns.countplot(data=df_top_gpc, x='GPC_Level2', hue='연령대', order=top_gpc_categories, hue_order=age_order, palette='Set2')
