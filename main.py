@@ -8,6 +8,8 @@ import math
 import matplotlib.pyplot as plt
 import seaborn as sns
 import traceback
+import urllib.parse # 이 라인을 추가하세요!
+
 
 app = FastAPI()
 
@@ -63,6 +65,9 @@ async def analyze_data(request: Request):
         data = await request.json()
         urls = data.get('urls', [])
         year = data.get('year', 'N/A')
+        service_key_raw = 'yPz9i7hzBc6SMyy1kgcYi9COZ2nxm2pvywSuBhMOGkA0tmS/J7Nm+3ggF6Rixf2k/qMkjAST6d6qbnmM7CckAA==' # ※※※ 여기에 실제 서비스 키를 입력하세요!!! ※※※
+        service_key = urllib.parse.quote(service_key_raw, safe='') # 이 라인을 추가하세요!
+
 
         if not urls:
             return HTMLResponse(content="<h3>Error: 분석할 URL 목록이 없습니다.</h3>", status_code=400)
