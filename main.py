@@ -7,13 +7,15 @@ from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse
 import pandas as pd
 import requests
+
+# FastAPI 앱 생성
+app = FastAPI()
+
+# --- 분석/시각화 함수들 (이 부분은 수정 없이 그대로 사용합니다) ---
+# ... (이전 답변과 동일한 create_plot_image, classify_gpc_level2, age_group 함수) ...
 import matplotlib.pyplot as plt
 import seaborn as sns
 
-app = FastAPI()
-
-# 1. 한글 폰트 설정 (이 부분은 그대로 두세요)
-# ... (이전과 동일) ...
 try:
     plt.rc('font', family='Malgun Gothic')
 except:
@@ -22,9 +24,7 @@ except:
     except:
         print("Warning: Korean font not found.")
 plt.rcParams['axes.unicode_minus'] = False
-
-# 2. 분석/시각화 함수들 (이전과 동일)
-# ... (create_plot_image, classify_gpc_level2, age_group 함수) ...
+        
 def create_plot_image(fig):
     buf = io.BytesIO()
     fig.savefig(buf, format='png', bbox_inches='tight')
@@ -59,39 +59,65 @@ def age_group(age):
     except (ValueError, TypeError):
         return '정보없음'
 
-# 3. n8n이 호출할 메인 API 함수 (최종 수정)
+# --- n8n이 호출할 메인 API 함수 (최종 수정) ---
 @app.post("/analyze", response_class=HTMLResponse)
 async def analyze_data(request: Request):
     try:
         data = await request.json()
         
-        # *** 수정된 부분: 이제 urls 리스트를 직접 받습니다. ***
-        urls_to_fetch = data.get('urls', [])
-        year = data.get('year', 'N/A')
-
-        if not urls_to_fetch:
-            return HTMLResponse(content="<h3>Error: 분석할 URL 목록이 없습니다.</h3>", status_code=400)
+        # n8n에서 "URL" 키로 보낸 기본 URL을 받습니다.
+        base_url = data.get('URL')
         
+        # Render 환경 변수에서 서비스 키를 안전하게 불러옵니다.
+        service_key = os.environ.get('SERVICE_KEY')
+
+        if not all([base_url, service_key]):
+            return HTMLResponse(content="<h3>Error: URL 또는 서버의 SERVICE_KEY 정보가 누락되었습니다.</h3>", status_code=400)
+        
+        # 1. 첫 페이지를 호출하여 totalCount를 알아냅니다.
+        params_first_page = {
+            'serviceKey': service_key,
+            'page': 1,
+            'perPage': 1,
+            'returnType': 'json'
+        }
+        response = requests.get(base_url, params=params_first_page, timeout=30)
+        response.raise_for_status()
+        first_page_data = response.json()
+        total_count = first_page_data.get('totalCount')
+        
+        if total_count is None:
+             return HTMLResponse(content="<h3>Error: API 응답에서 totalCount를 찾을 수 없습니다.</h3>", status_code=400)
+
+        # 2. 전체 페이지를 순회하며 모든 데이터를 다운로드합니다.
         all_dfs = []
-        # n8n에서 받은 URL 목록을 순회하며 데이터를 다운로드합니다.
-        for url in urls_to_fetch:
+        per_page = 1000
+        total_pages = math.ceil(total_count / per_page)
+
+        for page in range(1, total_pages + 1):
+            params_page = {
+                'serviceKey': service_key,
+                'page': page,
+                'perPage': per_page,
+                'returnType': 'json'
+            }
             try:
-                response = requests.get(url, timeout=30)
+                response = requests.get(base_url, params=params_page, timeout=30)
                 response.raise_for_status()
                 json_data = response.json()
                 df_part = pd.DataFrame(json_data.get('data', []))
                 if not df_part.empty:
                     all_dfs.append(df_part)
             except Exception as e:
-                print(f"URL 다운로드 실패: {url}, 에러: {e}")
+                print(f"{page}페이지 다운로드 실패: {e}")
         
         if not all_dfs:
-            return HTMLResponse(content="<h3>Error: URL에서 데이터를 가져오지 못했습니다.</h3>", status_code=400)
+            return HTMLResponse(content="<h3>Error: 전체 페이지에서 데이터를 가져오지 못했습니다.</h3>", status_code=400)
 
         df = pd.concat(all_dfs, ignore_index=True)
 
-        # (이하 분석 및 리포트 생성 코드는 변경 없습니다)
-        # ... (이전 답변과 동일) ...
+        # 3. 데이터 분석 및 시각화 (이하 로직은 동일)
+        # ...
         df.dropna(subset=['위해품목', '위험및위해원인'], inplace=True)
         age_column = '위해자연령' if '위해자연령' in df.columns else '위해자나이'
         df[age_column] = pd.to_numeric(df[age_column], errors='coerce')
@@ -102,13 +128,13 @@ async def analyze_data(request: Request):
         plt.figure(figsize=(12, 8))
         gpc_counts = df['GPC_Level2'].value_counts()
         gpc_plot = sns.barplot(x=gpc_counts.values, y=gpc_counts.index, palette='viridis', orient='h')
-        gpc_plot.set_title(f'{year}년 GPC Level 2 분류별 위해정보 발생 빈도', fontsize=16)
+        gpc_plot.set_title(f'GPC Level 2 분류별 위해정보 발생 빈도', fontsize=16)
         for p in gpc_plot.patches:
             gpc_plot.annotate(f'{int(p.get_width())}', (p.get_width(), p.get_y() + p.get_height() / 2.), ha='left', va='center', xytext=(5, 0), textcoords='offset points')
         gpc_freq_img = create_plot_image(plt.gcf())
         plt.close()
         
-        # (이하 분석 2, 3 및 HTML 생성 코드)
+        # 분석 2, 3 및 HTML 생성 코드...
         top_gpc_categories = gpc_counts.nlargest(5).index
         df_top_gpc = df[df['GPC_Level2'].isin(top_gpc_categories)]
         top_causes = df['위험및위해원인'].value_counts().nlargest(7).index
@@ -131,7 +157,7 @@ async def analyze_data(request: Request):
         
         html_report = f"""
         <html><head><meta charset="UTF-8"></head><body>
-            <h1>GPC 기반 위해정보 심층 분석 ({year}년)</h1>
+            <h1>GPC 기반 위해정보 심층 분석</h1>
             <h2>1. GPC Level 2 분류별 발생 빈도</h2>
             <img src="{gpc_freq_img}" style="width:100%; height:auto;">
             <h2>2. 주요 GPC 분류와 위해 원인 간 상관관계</h2>
