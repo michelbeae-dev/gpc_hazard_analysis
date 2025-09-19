@@ -4,13 +4,14 @@ import pandas as pd
 import requests
 import io
 import base64
+import math
 import matplotlib.pyplot as plt
 import seaborn as sns
 import traceback
 
 app = FastAPI()
 
-# 1. 한글 폰트 설정 (이 부분은 그대로 두세요)
+# 1. 한글 폰트 설정
 try:
     plt.rc('font', family='Malgun Gothic')
 except:
@@ -20,7 +21,7 @@ except:
         print("Warning: Korean font not found.")
 plt.rcParams['axes.unicode_minus'] = False
 
-# 2. 분석/시각화 함수들 (제공해주신 코드를 함수로 만들었습니다)
+# 2. 분석/시각화 함수들
 def create_plot_image(fig):
     buf = io.BytesIO()
     fig.savefig(buf, format='png', bbox_inches='tight')
@@ -63,26 +64,34 @@ async def analyze_data(request: Request):
         urls = data.get('urls', [])
         year = data.get('year', 'N/A')
 
-        if not urls: return HTMLResponse(content="<h3>Error: 분석할 URL 목록이 없습니다.</h3>", status_code=400)
+        if not urls:
+            return HTMLResponse(content="<h3>Error: 분석할 URL 목록이 없습니다.</h3>", status_code=400)
 
         all_dfs = []
         for url in urls:
-            response = requests.get(url, timeout=30)
-            response.raise_for_status()
-            json_data = response.json()
-            df_part = pd.DataFrame(json_data.get('data', []))
-            if not df_part.empty:
-                all_dfs.append(df_part)
+            try:
+                response = requests.get(url, timeout=30)
+                response.raise_for_status()
+                json_data = response.json()
+                df_part = pd.DataFrame(json_data.get('data', []))
+                if not df_part.empty:
+                    all_dfs.append(df_part)
+            except Exception as e:
+                print(f"URL 다운로드 실패: {url}, 에러: {e}")
+                continue
         
-        if not all_dfs: return HTMLResponse(content="<h3>Error: URL에서 데이터를 가져오지 못했습니다.</h3>", status_code=400)
+        if not all_dfs:
+            return HTMLResponse(content="<h3>Error: URL에서 데이터를 가져오지 못했습니다.</h3>", status_code=400)
 
         df = pd.concat(all_dfs, ignore_index=True)
 
-        # 데이터 전처리
+        # 분석 로직 시작
         df.dropna(subset=['위해품목', '위험및위해원인'], inplace=True)
-        df['위해자나이'] = pd.to_numeric(df['위해자나이'], errors='coerce')
+        # 컬럼 이름이 다를 수 있으므로, 여러 가능성을 모두 시도합니다.
+        age_column = '위해자연령' if '위해자연령' in df.columns else '위해자나이'
+        df[age_column] = pd.to_numeric(df[age_column], errors='coerce')
         df['GPC_Level2'] = df['위해품목'].apply(classify_gpc_level2)
-        df['연령대'] = df['위해자나이'].apply(age_group)
+        df['연령대'] = df[age_column].apply(age_group)
 
         # 분석 1: GPC 빈도
         plt.figure(figsize=(12, 8))
@@ -94,7 +103,7 @@ async def analyze_data(request: Request):
         gpc_freq_img = create_plot_image(plt.gcf())
         plt.close()
 
-        # 분석 2 & 3 ... (이하 분석 코드는 이전과 동일하게 추가)
+        # (이하 나머지 분석 코드 및 HTML 생성 코드는 그대로 유지)
         top_gpc_categories = gpc_counts.nlargest(5).index
         df_top_gpc = df[df['GPC_Level2'].isin(top_gpc_categories)]
         top_causes = df['위험및위해원인'].value_counts().nlargest(7).index
@@ -114,8 +123,7 @@ async def analyze_data(request: Request):
         plt.xticks(rotation=30, ha='right')
         gpc_age_dist_img = create_plot_image(plt.gcf())
         plt.close()
-
-        # 최종 HTML 리포트 생성
+        
         html_report = f"""
         <html><head><meta charset="UTF-8"></head><body>
             <h1>GPC 기반 위해정보 심층 분석 ({year}년)</h1>
@@ -128,5 +136,6 @@ async def analyze_data(request: Request):
         </body></html>
         """
         return HTMLResponse(content=html_report)
+
     except Exception:
         return HTMLResponse(content=f"<h3>분석 중 에러 발생:</h3><pre>{traceback.format_exc()}</pre>", status_code=500)
