@@ -9,17 +9,19 @@ import pandas as pd
 import requests
 import matplotlib.pyplot as plt
 import seaborn as sns
-import matplotlib.font_manager as fm
 
 app = FastAPI()
 
-# 1. 한글 폰트 설정 (NanumGothic-Regular.ttf 포함 방식)
+# 1. 한글 폰트 설정 (대체 폰트 지정)
 try:
-    font_path = os.path.join(os.path.dirname(__file__), "NanumGothic-Regular.ttf")
-    fontprop = fm.FontProperties(fname=font_path)
-    plt.rc('font', family=fontprop.get_name())
-except Exception as e:
-    print(f"Warning: Korean font not found. {e}")
+    plt.rc('font', family='Malgun Gothic')   # 윈도우 환경
+except:
+    try:
+        plt.rc('font', family='AppleGothic')  # 맥 환경
+    except:
+        plt.rc('font', family='DejaVu Sans')  # Render/Linux 기본
+        print("Warning: 한글 폰트가 없어 DejaVu Sans로 대체합니다. 일부 한글은 깨질 수 있습니다.")
+
 plt.rcParams['axes.unicode_minus'] = False
 
 
