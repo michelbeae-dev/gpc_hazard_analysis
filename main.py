@@ -25,15 +25,7 @@ plt.rcParams['axes.unicode_minus'] = False
 
 app = FastAPI()
 
-# 1. 한글 폰트 설정 (대체 폰트 지정)
-try:
-    plt.rc('font', family='Malgun Gothic')   # 윈도우 환경
-except:
-    try:
-        plt.rc('font', family='AppleGothic')  # 맥 환경
-    except:
-        plt.rc('font', family='DejaVu Sans')  # Render/Linux 기본
-        print("Warning: 한글 폰트가 없어 DejaVu Sans로 대체합니다. 일부 한글은 깨질 수 있습니다.")
+
 
 plt.rcParams['axes.unicode_minus'] = False
 
