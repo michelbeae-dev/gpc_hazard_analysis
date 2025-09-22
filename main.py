@@ -9,6 +9,19 @@ import pandas as pd
 import requests
 import matplotlib.pyplot as plt
 import seaborn as sns
+import matplotlib.font_manager as fm
+
+# 1. 한글 폰트 설정 (프로젝트 포함 TTF 사용)
+try:
+    font_path = os.path.join(os.path.dirname(__file__), "NanumGothic-Regular.ttf")
+    fontprop = fm.FontProperties(fname=font_path)
+    plt.rc('font', family=fontprop.get_name())
+    print(f"폰트 적용됨: {fontprop.get_name()}")
+except Exception as e:
+    print(f"Warning: Korean font load 실패 - {e}")
+    plt.rc('font', family='DejaVu Sans')  # fallback
+plt.rcParams['axes.unicode_minus'] = False
+
 
 app = FastAPI()
 
